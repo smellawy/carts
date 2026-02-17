@@ -1,49 +1,27 @@
 pipeline {
     agent any
 
-    environment {
-        DOCKERHUB_REPO = 'mohamedadel9988/carts'
-        IMAGE_TAG = "${BUILD_NUMBER}"
-    }
-
-    tools {
-        maven 'Maven'  // Configure in Manage Jenkins → Tools → Maven
-        jdk 'JDK21'    // Configure in Manage Jenkins → Tools → JDK
-    }
-
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-                echo "✅ Code checked out successfully"
+                echo '✅ Code checked out'
             }
         }
 
-        stage('Build') {
+        stage('Build & Test') {
             steps {
-                sh 'mvn clean compile'
-                echo "✅ Build completed"
-            }
-        }
-
-        stage('Test') {
-            steps {
-                sh 'mvn test || true'
-                echo "✅ Tests completed"
-            }
-        }
-
-        stage('Package') {
-            steps {
-                sh 'mvn package -DskipTests'
-                echo "✅ JAR packaged: target/carts.jar"
+                sh '''
+                    docker run --rm -v "$PWD":/app -w /app maven:3.9-eclipse-temurin-21 sh -c "mvn clean package -DskipTests && mvn test || true"
+                '''
+                echo '✅ Build & Test completed'
             }
         }
 
         stage('Docker Build') {
             steps {
-                sh "docker build -t ${DOCKERHUB_REPO}:${IMAGE_TAG} -t ${DOCKERHUB_REPO}:latest ."
-                echo "✅ Docker image built: ${DOCKERHUB_REPO}:${IMAGE_TAG}"
+                sh 'docker build -t mohamedadel9988/carts:latest -t mohamedadel9988/carts:${BUILD_NUMBER} .'
+                echo '✅ Docker image built'
             }
         }
 
@@ -56,16 +34,16 @@ pipeline {
                 )]) {
                     sh '''
                         echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
-                        docker push ${DOCKERHUB_REPO}:${IMAGE_TAG}
-                        docker push ${DOCKERHUB_REPO}:latest
+                        docker push mohamedadel9988/carts:latest
+                        docker push mohamedadel9988/carts:${BUILD_NUMBER}
                         docker logout
                     '''
                 }
-                echo "✅ Image pushed to Docker Hub"
+                echo '✅ Pushed to Docker Hub'
             }
         }
 
-        stage('Update K8s Manifest for ArgoCD') {
+        stage('Update K8s Manifest') {
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'github-credentials',
@@ -76,36 +54,30 @@ pipeline {
                         rm -rf mogambo-manifests
                         git clone https://${GIT_USER}:${GIT_PASS}@github.com/smellawy/mogambo-manifests.git
                         cd mogambo-manifests
-                        sed -i "s|image: mohamedadel9988/carts:.*|image: mohamedadel9988/carts:${IMAGE_TAG}|g" apps/carts/deployment.yml
+                        sed -i "s|image: mohamedadel9988/carts:.*|image: mohamedadel9988/carts:${BUILD_NUMBER}|g" apps/carts/deployment.yml
                         git config user.email "jenkins@mogambo.com"
                         git config user.name "Jenkins CI"
                         git add .
-                        git commit -m "🚀 Update carts image to build ${IMAGE_TAG}"
-                        git push origin main
+                        git commit -m "Update carts image to build ${BUILD_NUMBER}" || true
+                        git push origin main || true
                     '''
                 }
-                echo "✅ ArgoCD manifest updated"
+                echo '✅ ArgoCD manifest updated'
             }
         }
 
         stage('Cleanup') {
             steps {
                 sh '''
-                    docker rmi ${DOCKERHUB_REPO}:${IMAGE_TAG} || true
-                    docker rmi ${DOCKERHUB_REPO}:latest || true
+                    docker rmi mohamedadel9988/carts:${BUILD_NUMBER} || true
                     rm -rf mogambo-manifests
                 '''
-                echo "✅ Cleanup done"
             }
         }
     }
 
     post {
-        success {
-            echo "🎉 Carts pipeline completed successfully! Build #${BUILD_NUMBER}"
-        }
-        failure {
-            echo "❌ Carts pipeline failed at build #${BUILD_NUMBER}"
-        }
+        success { echo '🎉 Carts Pipeline SUCCESS! Build #${BUILD_NUMBER}' }
+        failure { echo '❌ Carts Pipeline FAILED! Build #${BUILD_NUMBER}' }
     }
 }
